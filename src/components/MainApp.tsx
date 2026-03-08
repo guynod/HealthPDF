@@ -52,7 +52,7 @@ function mergeMappingSuggestions(
 
   for (const suggestion of suggestions) {
     const current = mergedByField.get(suggestion.pdfFieldName);
-    if (current?.source === "manual") continue;
+    if (current?.source === "manual" || current?.source === "preset") continue;
 
     mergedByField.set(suggestion.pdfFieldName, {
       pdfFieldName: suggestion.pdfFieldName,

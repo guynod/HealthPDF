@@ -1,6 +1,7 @@
 "use client";
 
 import { PDFFieldInfo, FieldMapping, CLAIM_FIELD_META } from "@/lib/types";
+import { getPresetMappingForField } from "@/lib/form-presets";
 
 interface FieldMapperProps {
   pdfFields: PDFFieldInfo[];
@@ -18,6 +19,17 @@ export default function FieldMapper({
   const getMapping = (pdfFieldName: string): FieldMapping | undefined => {
     return mappings.find((m) => m.pdfFieldName === pdfFieldName);
   };
+
+  const counts = mappings.reduce(
+    (acc, mapping) => {
+      if (mapping.source === "preset") acc.preset += 1;
+      else if (mapping.source === "manual") acc.manual += 1;
+      else if (mapping.source === "ai") acc.ai += 1;
+      else acc.auto += 1;
+      return acc;
+    },
+    { preset: 0, manual: 0, ai: 0, auto: 0 }
+  );
 
   const getMappedKey = (pdfFieldName: string): string => {
     return getMapping(pdfFieldName)?.claimDataKey || "";
@@ -72,6 +84,12 @@ export default function FieldMapper({
     const newMappings: FieldMapping[] = [];
     for (const pdfField of pdfFields) {
       const fieldNorm = normalize(pdfField.name);
+
+      const presetMatch = getPresetMappingForField(pdfField);
+      if (presetMatch) {
+        newMappings.push(presetMatch);
+        continue;
+      }
 
       if (
         (fieldNorm.includes("dob") || fieldNorm.includes("birth")) &&
@@ -191,6 +209,22 @@ export default function FieldMapper({
         </button>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800/40">
+        <span className="font-medium text-zinc-500">Matched:</span>
+        <span className="rounded bg-emerald-100 px-2 py-0.5 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+          Preset {counts.preset}
+        </span>
+        <span className="rounded bg-blue-100 px-2 py-0.5 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300">
+          AI {counts.ai}
+        </span>
+        <span className="rounded bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+          Auto {counts.auto}
+        </span>
+        <span className="rounded bg-zinc-200 px-2 py-0.5 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200">
+          Manual {counts.manual}
+        </span>
+      </div>
+
       <div className="max-h-80 space-y-2 overflow-y-auto rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
         {pdfFields.map((field) => (
           <div
@@ -202,6 +236,11 @@ export default function FieldMapper({
                 {field.name}
               </p>
               <p className="text-xs text-zinc-400">{field.type}</p>
+              {getMapping(field.name)?.source && (
+                <p className="text-xs text-zinc-500">
+                  source: {getMapping(field.name)?.source}
+                </p>
+              )}
               {typeof getMapping(field.name)?.confidence === "number" && (
                 <p className="text-xs text-blue-500">
                   confidence: {(getMapping(field.name)!.confidence! * 100).toFixed(0)}%

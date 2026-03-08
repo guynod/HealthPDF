@@ -36,7 +36,7 @@ export interface FieldMapping {
   transform?: MappingTransform;
   staticValue?: string;
   confidence?: number;
-  source?: "manual" | "auto" | "ai";
+  source?: "manual" | "auto" | "ai" | "preset";
   reason?: string;
 }
 
