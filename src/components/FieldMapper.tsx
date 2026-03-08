@@ -64,14 +64,21 @@ export default function FieldMapper({
 
     const synonymMap: Record<string, string[]> = {
       dateOfBirth: ["dob", "birth", "birthdate", "birthday"],
+      subscriberName: ["subscriber", "insuredname", "nameofsubscriber"],
+      subscriberContact: ["subscriberphone", "subscriberemail", "phoneoremail", "contact"],
+      planName: ["plan", "planname", "gehaplanname"],
+      insurerName: ["insurer", "insurancecompany", "carrier"],
       policyNumber: ["policy", "policyno", "policynumber", "insuredid"],
       memberId: ["member", "subscriber", "subscriberid", "insuredid"],
       insuranceGroup: ["group", "groupnumber", "employer", "plan"],
       patientName: ["patient", "insured", "fullname", "membername"],
+      foreignProvider: ["foreign", "outsideus", "overseas", "abroad"],
+      serviceCountry: ["country", "servicecountry"],
       dateOfService: ["service", "visitdate", "treatmentdate"],
       amountCharged: ["amount", "total", "charge", "cost"],
       receiptNumber: ["invoice", "receipt", "claimnumber", "referenceno"],
       gender: ["gender", "sex", "male", "female"],
+      additionalNotes: ["additional", "remarks", "comments", "explanation", "other"],
     };
     for (const synonym of synonymMap[claimKey] || []) {
       if (fieldNorm.includes(normalize(synonym))) score += 3;
@@ -238,12 +245,22 @@ export default function FieldMapper({
               <p className="text-xs text-zinc-400">{field.type}</p>
               {getMapping(field.name)?.source && (
                 <p className="text-xs text-zinc-500">
-                  source: {getMapping(field.name)?.source}
+                  source:{" "}
+                  {getMapping(field.name)?.source === "ai"
+                    ? "AI/web-assisted"
+                    : getMapping(field.name)?.source}
                 </p>
               )}
               {typeof getMapping(field.name)?.confidence === "number" && (
-                <p className="text-xs text-blue-500">
+                <p
+                  className={`text-xs ${
+                    (getMapping(field.name)!.confidence || 0) < 0.7
+                      ? "text-amber-500"
+                      : "text-blue-500"
+                  }`}
+                >
                   confidence: {(getMapping(field.name)!.confidence! * 100).toFixed(0)}%
+                  {(getMapping(field.name)!.confidence || 0) < 0.7 ? " (review)" : ""}
                 </p>
               )}
             </div>

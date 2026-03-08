@@ -2,11 +2,15 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
+  DiagnosisSuggestion,
+  ExtractResponsePayload,
+  FxConversion,
   UserProfile,
   PDFFieldInfo,
   FieldMapping,
   ClaimData,
   MappingSuggestion,
+  ProviderClassification,
   ValidationWarning,
   EMPTY_PROFILE,
   EMPTY_CLAIM,
@@ -20,6 +24,7 @@ import {
 } from "@/lib/storage";
 import { fillFormEditable, fillFormFinalized } from "@/lib/pdf-utils";
 import { generateMailtoLink, generateEmailPreview } from "@/lib/email";
+import { getPresetMappingForField } from "@/lib/form-presets";
 import SettingsModal from "./SettingsModal";
 import UploadZone from "./UploadZone";
 import DataReviewForm from "./DataReviewForm";
@@ -31,12 +36,6 @@ type InvoiceAttachment = {
   fileName: string;
   mimeType: string;
   bytes: Uint8Array;
-};
-
-type ExtractResponse = {
-  data: ClaimData;
-  mappingSuggestions?: MappingSuggestion[];
-  validationWarnings?: ValidationWarning[];
 };
 
 function dedupeWarnings(warnings: ValidationWarning[]): ValidationWarning[] {
@@ -82,11 +81,44 @@ function mergeMappingSuggestions(
   return [...mergedByField.values()];
 }
 
-function buildBlockingWarnings(claimData: ClaimData): ValidationWarning[] {
+function backfillPresetMappings(
+  currentMappings: FieldMapping[],
+  fields: PDFFieldInfo[]
+): FieldMapping[] {
+  const byField = new Map<string, FieldMapping>();
+  for (const mapping of currentMappings) byField.set(mapping.pdfFieldName, mapping);
+
+  for (const field of fields) {
+    const preset = getPresetMappingForField(field);
+    const existing = byField.get(field.name);
+
+    // Always refresh preset mappings unless user explicitly set manual mapping.
+    if (preset && existing?.source !== "manual") {
+      byField.set(field.name, preset);
+      continue;
+    }
+
+    if (!existing && preset) {
+      byField.set(field.name, preset);
+    }
+  }
+
+  return [...byField.values()];
+}
+
+function buildBlockingWarnings(
+  claimData: ClaimData,
+  mappings: FieldMapping[],
+  providerClassification: ProviderClassification | null,
+  fxConversion: FxConversion | null,
+  diagnosisConfirmed: boolean
+): ValidationWarning[] {
   const warnings: ValidationWarning[] = [];
 
   const required: { key: keyof ClaimData; label: string }[] = [
     { key: "patientName", label: "Patient Name" },
+    { key: "subscriberName", label: "Subscriber Name" },
+    { key: "planName", label: "Plan Name" },
     { key: "dateOfBirth", label: "Date of Birth" },
     { key: "policyNumber", label: "Policy Number" },
     { key: "providerName", label: "Provider Name" },
@@ -122,6 +154,60 @@ function buildBlockingWarnings(claimData: ClaimData): ValidationWarning[] {
     warnings.push({
       code: "date_of_service_format",
       message: "Date of Service should be in YYYY-MM-DD format.",
+      severity: "warning",
+    });
+  }
+
+  if (providerClassification && providerClassification.confidence < 0.75) {
+    warnings.push({
+      code: "provider_classification_low_confidence",
+      message: "Provider classification confidence is low. Verify claim type.",
+      severity: "warning",
+    });
+  }
+
+  if (!claimData.amountUSD.trim()) {
+    warnings.push({
+      code: "usd_amount_missing",
+      message: "USD amount is missing. Confirm conversion before finalizing.",
+      severity: "error",
+    });
+  }
+
+  if (fxConversion && fxConversion.status !== "ok") {
+    warnings.push({
+      code: "usd_conversion_unverified",
+      message: "Historical FX conversion could not be verified automatically.",
+      severity: "warning",
+    });
+  }
+
+  if (!claimData.diagnosisCode.trim()) {
+    warnings.push({
+      code: "diagnosis_code_missing",
+      message: "Diagnosis code is required before finalizing.",
+      severity: "error",
+    });
+  }
+
+  if (!diagnosisConfirmed) {
+    warnings.push({
+      code: "diagnosis_not_confirmed",
+      message: "Please confirm diagnosis code selection before finalizing.",
+      severity: "error",
+    });
+  }
+
+  const lowConfidenceCount = mappings.filter(
+    (mapping) =>
+      (mapping.source === "ai" || mapping.source === "auto") &&
+      typeof mapping.confidence === "number" &&
+      mapping.confidence < 0.7
+  ).length;
+  if (lowConfidenceCount > 0) {
+    warnings.push({
+      code: "low_confidence_mappings",
+      message: `${lowConfidenceCount} field mapping(s) have low confidence. Review in Settings if output looks incorrect.`,
       severity: "warning",
     });
   }
@@ -174,6 +260,11 @@ export default function MainApp() {
   const [filledPdfBlob, setFilledPdfBlob] = useState<Blob | null>(null);
   const [outputMode, setOutputMode] = useState<OutputMode>(null);
   const [validationWarnings, setValidationWarnings] = useState<ValidationWarning[]>([]);
+  const [providerClassification, setProviderClassification] =
+    useState<ProviderClassification | null>(null);
+  const [fxConversion, setFxConversion] = useState<FxConversion | null>(null);
+  const [diagnosisSuggestions, setDiagnosisSuggestions] = useState<DiagnosisSuggestion[]>([]);
+  const [diagnosisConfirmed, setDiagnosisConfirmed] = useState(false);
 
   useEffect(() => {
     setProfile(loadProfile());
@@ -212,14 +303,59 @@ export default function MainApp() {
 
   const mergeProfileIntoClaimData = useCallback(
     (data: ClaimData): ClaimData => {
+      const isIsoDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test((value || "").trim());
+      const normalizedCurrency = (data.currency || "").toUpperCase();
+      const rawForeign = (data.foreignProvider || "").trim().toLowerCase();
+      const foreignTruthy =
+        rawForeign === "yes" ||
+        rawForeign === "true" ||
+        rawForeign === "1" ||
+        rawForeign === "y" ||
+        rawForeign === "checked";
+      const foreignSignal =
+        normalizedCurrency && normalizedCurrency !== "USD"
+          ? true
+          : /(thailand|israel|japan|europe|france|spain|germany|uk|unitedkingdom|mexico|canada|australia)/i.test(
+              `${data.serviceCountry || ""}`.replace(/\s+/g, "")
+            );
+      const normalizedForeign =
+        (foreignTruthy || foreignSignal)
+          ? "yes"
+          : "no";
+
+      let normalizedClaimType = (data.claimType || "").trim().toLowerCase();
+      if (!normalizedClaimType || normalizedClaimType === "other") {
+        const text = `${data.description || ""} ${data.providerName || ""}`.toLowerCase();
+        if (/(outpatient|inpatient|hospital|emergency|clinic)/i.test(text)) {
+          normalizedClaimType = "hospital";
+        } else if (/(lab|laboratory|pathology|blood)/i.test(text)) {
+          normalizedClaimType = "lab";
+        } else if (/(xray|x-ray|mri|ct|ultrasound|radiology|imaging)/i.test(text)) {
+          normalizedClaimType = "imaging";
+        } else if (/(pharmacy|rx|prescription|drug)/i.test(text)) {
+          normalizedClaimType = "pharmacy";
+        } else if (/(doctor|physician|office visit|consult)/i.test(text)) {
+          normalizedClaimType = "doctor_visit";
+        }
+      }
       return {
         ...data,
         patientName: data.patientName || profile.patientName,
-        dateOfBirth: data.dateOfBirth || profile.dateOfBirth,
-        policyNumber: data.policyNumber || profile.policyNumber,
-        memberId: data.memberId || profile.memberId,
-        insuranceGroup: data.insuranceGroup || profile.insuranceGroup,
+        subscriberName: profile.subscriberName || data.subscriberName || profile.patientName,
+        subscriberContact: profile.subscriberContact || data.subscriberContact,
+        // Prefer profile DOB for stability; user can still edit in review for family-member claims.
+        dateOfBirth:
+          profile.dateOfBirth ||
+          (isIsoDate(data.dateOfBirth) ? data.dateOfBirth : "") ||
+          data.dateOfBirth,
+        planName: profile.planName || profile.insurerName || data.planName || data.insurerName,
+        insurerName: profile.insurerName || data.insurerName || profile.planName,
+        policyNumber: profile.policyNumber || data.policyNumber,
+        memberId: profile.memberId || data.memberId,
+        insuranceGroup: profile.insuranceGroup || data.insuranceGroup,
         patientAddress: data.patientAddress || profile.patientAddress,
+        foreignProvider: normalizedForeign,
+        claimType: normalizedClaimType || data.claimType,
       };
     },
     [profile]
@@ -261,6 +397,7 @@ export default function MainApp() {
       setReceiptName(file.name);
       setReceiptFile(file);
       setValidationWarnings([]);
+      setDiagnosisConfirmed(false);
       setStep("extracting");
 
       try {
@@ -273,13 +410,16 @@ export default function MainApp() {
           body: formData,
         });
 
-        const json: ExtractResponse & { error?: string } = await res.json();
+        const json: Partial<ExtractResponsePayload> & { error?: string } = await res.json();
         if (!res.ok) {
           throw new Error(json.error || "Extraction failed");
         }
 
-        const merged = mergeProfileIntoClaimData(json.data);
+        const merged = mergeProfileIntoClaimData(json.data || EMPTY_CLAIM);
         setClaimData(merged);
+        setProviderClassification(json.providerClassification || null);
+        setFxConversion(json.fxConversion || null);
+        setDiagnosisSuggestions(json.diagnosisSuggestions || []);
 
         const suggestedMappings = json.mappingSuggestions || [];
         if (suggestedMappings.length > 0) {
@@ -311,7 +451,17 @@ export default function MainApp() {
           throw new Error("No template found. Please upload one in Settings.");
         }
 
-        const warnings = buildBlockingWarnings(claimData);
+        // Final safety merge so stable profile defaults are always present at fill time.
+        const effectiveClaimData = mergeProfileIntoClaimData(claimData);
+        setClaimData(effectiveClaimData);
+
+        const warnings = buildBlockingWarnings(
+          effectiveClaimData,
+          mappings,
+          providerClassification,
+          fxConversion,
+          diagnosisConfirmed
+        );
         setValidationWarnings((prev) =>
           dedupeWarnings([...prev.filter((w) => w.severity !== "error"), ...warnings])
         );
@@ -324,8 +474,18 @@ export default function MainApp() {
 
         const outputBytes =
           mode === "editable"
-            ? await fillFormEditable(templateBytes, claimData, mappings, invoiceAttachment)
-            : await fillFormFinalized(templateBytes, claimData, mappings, invoiceAttachment);
+            ? await fillFormEditable(
+                templateBytes,
+                effectiveClaimData,
+                backfillPresetMappings(mappings, pdfFields),
+                invoiceAttachment
+              )
+            : await fillFormFinalized(
+                templateBytes,
+                effectiveClaimData,
+                backfillPresetMappings(mappings, pdfFields),
+                invoiceAttachment
+              );
 
         const blob = new Blob([new Uint8Array(outputBytes)], { type: "application/pdf" });
         const url = URL.createObjectURL(blob);
@@ -340,7 +500,15 @@ export default function MainApp() {
         setStep("review");
       }
     },
-    [claimData, mappings, filledPdfUrl, toInvoiceAttachment]
+    [
+      claimData,
+      mappings,
+      filledPdfUrl,
+      toInvoiceAttachment,
+      providerClassification,
+      fxConversion,
+      diagnosisConfirmed,
+    ]
   );
 
   const handleGenerateEditable = useCallback(async () => {
@@ -350,6 +518,13 @@ export default function MainApp() {
   const handleFinalizePdf = useCallback(async () => {
     await generatePdf("finalized");
   }, [generatePdf]);
+
+  const handleClaimDataChange = useCallback((next: ClaimData) => {
+    if (next.diagnosisCode !== claimData.diagnosisCode && diagnosisConfirmed) {
+      setDiagnosisConfirmed(false);
+    }
+    setClaimData(next);
+  }, [claimData.diagnosisCode, diagnosisConfirmed]);
 
   const handleDownload = useCallback(() => {
     if (!filledPdfUrl) return;
@@ -398,6 +573,10 @@ export default function MainApp() {
     setOutputMode(null);
     setError("");
     setValidationWarnings([]);
+    setProviderClassification(null);
+    setFxConversion(null);
+    setDiagnosisSuggestions([]);
+    setDiagnosisConfirmed(false);
   }, [filledPdfUrl]);
 
   const isSetupComplete = templateName && mappings.length > 0;
@@ -475,8 +654,13 @@ export default function MainApp() {
 
               <DataReviewForm
                 data={claimData}
-                onChange={setClaimData}
+                onChange={handleClaimDataChange}
                 warnings={validationWarnings}
+                providerClassification={providerClassification}
+                fxConversion={fxConversion}
+                diagnosisSuggestions={diagnosisSuggestions}
+                diagnosisConfirmed={diagnosisConfirmed}
+                onDiagnosisConfirmedChange={setDiagnosisConfirmed}
               />
 
               <div className="flex flex-wrap gap-3 pt-2">

@@ -9,7 +9,10 @@ interface ProfileSettingsProps {
 
 const PROFILE_FIELDS: { key: keyof UserProfile; label: string; type?: string }[] = [
   { key: "patientName", label: "Full Name" },
+  { key: "subscriberName", label: "Subscriber Name" },
+  { key: "subscriberContact", label: "Subscriber Phone/Email" },
   { key: "dateOfBirth", label: "Date of Birth", type: "date" },
+  { key: "planName", label: "Plan Name" },
   { key: "policyNumber", label: "Policy Number" },
   { key: "memberId", label: "Member ID" },
   { key: "insuranceGroup", label: "Insurance Group" },

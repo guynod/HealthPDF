@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { UserProfile, PDFFieldInfo, FieldMapping } from "@/lib/types";
-import { discoverFields } from "@/lib/pdf-utils";
+import { discoverFields, extractProfileDefaultsFromTemplate } from "@/lib/pdf-utils";
 import { saveTemplate } from "@/lib/storage";
 import ProfileSettings from "./ProfileSettings";
 import FieldMapper from "./FieldMapper";
@@ -35,15 +35,18 @@ export default function SettingsModal({
 }: SettingsModalProps) {
   const [tab, setTab] = useState<"profile" | "template">("profile");
   const [templateError, setTemplateError] = useState("");
+  const [templateInfo, setTemplateInfo] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleTemplateUpload = useCallback(
     async (file: File) => {
       setTemplateError("");
+      setTemplateInfo("");
       setLoading(true);
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
         const fields = await discoverFields(bytes);
+        const defaults = await extractProfileDefaultsFromTemplate(bytes);
 
         if (fields.length === 0) {
           setTemplateError(
@@ -56,6 +59,25 @@ export default function SettingsModal({
         await saveTemplate(bytes);
         onPdfFieldsChange(fields);
         onTemplateNameChange(file.name);
+
+        const mergedProfile: UserProfile = { ...profile };
+        let applied = 0;
+        for (const [key, value] of Object.entries(defaults.profile) as Array<
+          [keyof UserProfile, string]
+        >) {
+          if (!mergedProfile[key] && value) {
+            mergedProfile[key] = value;
+            applied += 1;
+          }
+        }
+        if (applied > 0) {
+          onProfileChange(mergedProfile);
+          setTemplateInfo(`Pre-filled ${applied} profile field(s) from claim form values.`);
+        } else if (defaults.notes.length > 0) {
+          setTemplateInfo(
+            "Claim form values detected, but your existing profile already had those fields filled."
+          );
+        }
       } catch (err) {
         setTemplateError(
           err instanceof Error ? err.message : "Failed to read PDF"
@@ -64,7 +86,7 @@ export default function SettingsModal({
         setLoading(false);
       }
     },
-    [onPdfFieldsChange, onTemplateNameChange]
+    [onPdfFieldsChange, onTemplateNameChange, profile, onProfileChange]
   );
 
   if (!open) return null;
@@ -124,6 +146,11 @@ export default function SettingsModal({
               />
               {templateError && (
                 <p className="text-sm text-red-500">{templateError}</p>
+              )}
+              {templateInfo && (
+                <p className="text-sm text-emerald-600 dark:text-emerald-400">
+                  {templateInfo}
+                </p>
               )}
               {loading && (
                 <p className="text-sm text-zinc-500">Analyzing PDF fields...</p>

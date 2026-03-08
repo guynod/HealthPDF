@@ -14,7 +14,25 @@ function mapDatePart(
   yearNeedles: string[]
 ): FieldMapping | null {
   const name = normalize(field.name);
+  const rawName = field.name.toLowerCase();
   if (!hasAny(name, baseNeedles)) return null;
+
+  const hasCompactDatePattern =
+    name.includes("mmddyyyy") || name.includes("mmddyy");
+  const suffixMatch = rawName.match(/_(\d+)\s*$/);
+  const suffix = suffixMatch ? Number(suffixMatch[1]) : -1;
+  if (hasCompactDatePattern) {
+    const transform =
+      suffix === 2 ? "date_year" : suffix === 1 ? "date_day" : "date_month";
+    return {
+      pdfFieldName: field.name,
+      claimDataKey: "dateOfBirth",
+      transform,
+      confidence: 0.99,
+      source: "preset",
+      reason: "Preset matched split date by mm/dd/yyyy suffix pattern",
+    };
+  }
 
   if (hasAny(name, monthNeedles)) {
     return {
@@ -96,6 +114,42 @@ export function getPresetMappingForField(field: PDFFieldInfo): FieldMapping | nu
         reason: "Preset matched gender female checkbox",
       };
     }
+
+    const claimTypeCheckboxes: Array<{
+      needles: string[];
+      claimType: "lab" | "doctor_visit" | "hospital" | "imaging" | "pharmacy";
+      reason: string;
+    }> = [
+      { needles: ["lab", "laboratory", "pathology"], claimType: "lab", reason: "Preset matched lab checkbox" },
+      { needles: ["doctor", "physician", "officevisit", "clinicvisit"], claimType: "doctor_visit", reason: "Preset matched doctor visit checkbox" },
+      { needles: ["hospital", "inpatient", "outpatient", "emergency"], claimType: "hospital", reason: "Preset matched hospital checkbox" },
+      { needles: ["imaging", "xray", "mri", "ct", "ultrasound", "radiology"], claimType: "imaging", reason: "Preset matched imaging checkbox" },
+      { needles: ["pharmacy", "drug", "medication", "rx"], claimType: "pharmacy", reason: "Preset matched pharmacy checkbox" },
+    ];
+    for (const item of claimTypeCheckboxes) {
+      if (hasAny(name, item.needles.map(normalize))) {
+        return {
+          pdfFieldName: field.name,
+          claimDataKey: "claimType",
+          transform: "checkbox_equals",
+          staticValue: item.claimType,
+          confidence: 0.97,
+          source: "preset",
+          reason: item.reason,
+        };
+      }
+    }
+
+    if (hasAny(name, ["foreign", "overseas", "outsideus", "outofcountry", "abroad"])) {
+      return {
+        pdfFieldName: field.name,
+        claimDataKey: "foreignProvider",
+        transform: "checkbox_truthy",
+        confidence: 0.97,
+        source: "preset",
+        reason: "Preset matched foreign provider checkbox",
+      };
+    }
   }
 
   if (hasAny(name, ["groupnumber", "groupid", "groupno", "grp"])) {
@@ -139,6 +193,71 @@ export function getPresetMappingForField(field: PDFFieldInfo): FieldMapping | nu
       confidence: 0.93,
       source: "preset",
       reason: "Preset matched patient/insured name",
+    };
+  }
+
+  if (hasAny(name, ["subscribername", "nameofsubscriber"])) {
+    return {
+      pdfFieldName: field.name,
+      claimDataKey: "subscriberName",
+      transform: "none",
+      confidence: 0.96,
+      source: "preset",
+      reason: "Preset matched subscriber name",
+    };
+  }
+
+  if (hasAny(name, ["subscriberphone", "subscriberemail", "phoneoremail"])) {
+    return {
+      pdfFieldName: field.name,
+      claimDataKey: "subscriberContact",
+      transform: "none",
+      confidence: 0.95,
+      source: "preset",
+      reason: "Preset matched subscriber contact",
+    };
+  }
+
+  if (hasAny(name, ["planname", "gehaplanname", "insuranceplan"])) {
+    return {
+      pdfFieldName: field.name,
+      claimDataKey: "planName",
+      transform: "none",
+      confidence: 0.95,
+      source: "preset",
+      reason: "Preset matched plan name",
+    };
+  }
+
+  if (hasAny(name, ["country", "countryofservice", "servicecountry"])) {
+    return {
+      pdfFieldName: field.name,
+      claimDataKey: "serviceCountry",
+      transform: "none",
+      confidence: 0.9,
+      source: "preset",
+      reason: "Preset matched service country",
+    };
+  }
+
+  if (
+    hasAny(name, [
+      "ifcheckedother",
+      "additionalinfo",
+      "additionalinformation",
+      "comments",
+      "remarks",
+      "explanation",
+      "brieflydescribeservicesrendered",
+    ])
+  ) {
+    return {
+      pdfFieldName: field.name,
+      claimDataKey: "additionalNotes",
+      transform: "none",
+      confidence: 0.92,
+      source: "preset",
+      reason: "Preset matched additional notes area",
     };
   }
 
