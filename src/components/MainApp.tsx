@@ -539,27 +539,8 @@ export default function MainApp() {
   const handleShareViaEmail = useCallback(async () => {
     if (!filledPdfBlob) return;
 
-    if (navigator.share && navigator.canShare) {
-      const file = new File(
-        [filledPdfBlob],
-        `claim-${claimData.dateOfService || "form"}.pdf`,
-        { type: "application/pdf" }
-      );
-      const shareData = {
-        files: [file],
-        ...generateEmailPreview(profile, claimData),
-      };
-      if (navigator.canShare(shareData)) {
-        try {
-          await navigator.share(shareData);
-          return;
-        } catch {
-          /* user cancelled, fall through */
-        }
-      }
-    }
-
-    window.location.href = generateMailtoLink(profile, claimData);
+    const mailto = generateMailtoLink(profile, claimData);
+    window.location.href = mailto;
   }, [filledPdfBlob, profile, claimData]);
 
   const handleReset = useCallback(() => {

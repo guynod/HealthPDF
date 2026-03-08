@@ -23,9 +23,10 @@ export function generateEmailPreview(
   claimData: ClaimData
 ): { to: string; subject: string; body: string } {
   const merged: Record<string, string> = { ...claimData, ...profile };
+  const subject = interpolate(profile.emailSubjectTemplate, merged);
   return {
     to: profile.insurerEmail,
-    subject: interpolate(profile.emailSubjectTemplate, merged),
+    subject,
     body: interpolate(profile.emailBodyTemplate, merged),
   };
 }

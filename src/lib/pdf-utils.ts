@@ -160,10 +160,16 @@ function splitDateParts(value: string): { month: string; day: string; year: stri
 }
 
 function transformValue(mapping: FieldMapping, claimData: ClaimData): string {
-  const rawValue =
+  const rawCandidate =
     mapping.staticValue !== undefined
       ? mapping.staticValue
       : claimData[mapping.claimDataKey] || "";
+  const rawValue =
+    typeof rawCandidate === "string"
+      ? rawCandidate
+      : rawCandidate === null || rawCandidate === undefined
+        ? ""
+        : String(rawCandidate);
 
   const transform: MappingTransform = mapping.transform || "none";
 
@@ -179,7 +185,7 @@ function transformValue(mapping: FieldMapping, claimData: ClaimData): string {
 
 function shouldCheck(mapping: FieldMapping, value: string): boolean {
   const transform: MappingTransform = mapping.transform || "checkbox_truthy";
-  const normalized = value.trim().toLowerCase();
+  const normalized = (value ?? "").toString().trim().toLowerCase();
 
   if (transform === "checkbox_equals") {
     return normalized === (mapping.staticValue || "").trim().toLowerCase();
@@ -458,7 +464,19 @@ async function fillFormBase(
     }
   }
 
-  if (flatten) form.flatten();
+  if (flatten) {
+    try {
+      form.flatten();
+    } catch {
+      for (const field of form.getFields()) {
+        try {
+          field.enableReadOnly();
+        } catch {
+          /* ignore readonly failures */
+        }
+      }
+    }
+  }
   await appendInvoicePages(pdfDoc, invoiceAttachment);
   return pdfDoc.save();
 }
