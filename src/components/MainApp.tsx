@@ -39,6 +39,20 @@ type ExtractResponse = {
   validationWarnings?: ValidationWarning[];
 };
 
+function dedupeWarnings(warnings: ValidationWarning[]): ValidationWarning[] {
+  const seen = new Set<string>();
+  const deduped: ValidationWarning[] = [];
+
+  for (const warning of warnings) {
+    const signature = `${warning.code}::${warning.message}::${warning.severity}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    deduped.push(warning);
+  }
+
+  return deduped;
+}
+
 function mergeMappingSuggestions(
   existing: FieldMapping[],
   suggestions: MappingSuggestion[]
@@ -274,7 +288,7 @@ export default function MainApp() {
           saveMappings(mergedMappings);
         }
 
-        setValidationWarnings(json.validationWarnings || []);
+        setValidationWarnings(dedupeWarnings(json.validationWarnings || []));
         setStep("review");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Extraction failed");
@@ -298,7 +312,9 @@ export default function MainApp() {
         }
 
         const warnings = buildBlockingWarnings(claimData);
-        setValidationWarnings((prev) => [...prev.filter((w) => w.severity !== "error"), ...warnings]);
+        setValidationWarnings((prev) =>
+          dedupeWarnings([...prev.filter((w) => w.severity !== "error"), ...warnings])
+        );
 
         if (mode === "finalized" && warnings.some((w) => w.severity === "error")) {
           throw new Error("Please fix required fields before finalizing.");

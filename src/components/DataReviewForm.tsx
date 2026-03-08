@@ -28,8 +28,8 @@ export default function DataReviewForm({
             Validation Warnings
           </p>
           <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
-            {warnings.map((warning) => (
-              <li key={warning.code}>- {warning.message}</li>
+            {warnings.map((warning, index) => (
+              <li key={`${warning.code}_${index}`}>- {warning.message}</li>
             ))}
           </ul>
         </div>
