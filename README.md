@@ -1,36 +1,82 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# HealthPDF
 
-## Getting Started
+HealthPDF is a local-first Next.js tool for turning medical receipts or invoices into filled health insurance claim PDFs.
 
-First, run the development server:
+## What It Does
+
+- Stores your claim form template in browser IndexedDB.
+- Stores profile defaults and field mappings in browser localStorage.
+- Extracts receipt/invoice data through the local `/api/extract` route using Gemini.
+- Fills editable or flattened claim PDFs with `pdf-lib`.
+- Appends the source receipt/invoice pages to the generated claim packet.
+- Opens an email draft with the claim metadata so you can attach the generated PDF manually.
+
+## Privacy Model
+
+This app handles health and insurance data. Treat it as private.
+
+- `.env.local` is ignored by git and should contain your Gemini key.
+- Profile defaults, mappings, and templates stay in your browser storage.
+- Uploaded receipts/invoices are sent to Gemini for extraction when you run the app.
+- Provider-address lookup is disabled by default because it would send provider names/addresses to OpenStreetMap Nominatim.
+- FX lookup sends currency/date only to Frankfurter when a non-USD conversion is needed.
+- Do not commit real claim PDFs, receipts, screenshots, exports, or generated packets.
+
+## Setup
 
 ```bash
+npm install
+cp .env.local.example .env.local
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Required environment:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+GEMINI_API_KEY=your-api-key-here
+GEMINI_MODEL=gemini-2.5-flash
+```
 
-## Learn More
+Optional environment:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+HEALTHPDF_MAX_UPLOAD_MB=15
+HEALTHPDF_ENABLE_PROVIDER_LOOKUP=false
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Set `HEALTHPDF_ENABLE_PROVIDER_LOOKUP=true` only if you accept sending provider names/addresses to OpenStreetMap Nominatim for classification help.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Workflow
 
-## Deploy on Vercel
+1. Open Settings.
+2. Fill your profile/email defaults.
+3. Upload the insurer's fillable PDF claim form.
+4. Review or adjust field mappings.
+5. Upload a receipt/invoice.
+6. Review extracted data, warnings, diagnosis code, claim type, and USD conversion.
+7. Generate an editable PDF first.
+8. Finalize and flatten only after the editable PDF looks right.
+9. Download the PDF, open the email draft, attach the PDF manually, and send.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Checks
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run lint
+npm run build
+```
+
+There is not yet an automated test suite. Good next tests would cover upload guards, warning preservation, PDF field transforms, and email/template interpolation.
+
+## TARS Integration Recommendation
+
+Keep the real claim data local. If this becomes part of the TARS system, use TARS only for metadata tracking, for example:
+
+- claim packet generated
+- insurer submitted to
+- follow-up date
+- reimbursement received
+- open blockers
+
+Do not give TARS claim PDFs, receipts, member IDs, diagnosis text, or generated packets unless you make a separate explicit privacy decision.

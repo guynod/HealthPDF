@@ -38,6 +38,11 @@ type InvoiceAttachment = {
   bytes: Uint8Array;
 };
 
+type ChecklistItem = {
+  label: string;
+  status: "ready" | "review" | "waiting";
+};
+
 function dedupeWarnings(warnings: ValidationWarning[]): ValidationWarning[] {
   const seen = new Set<string>();
   const deduped: ValidationWarning[] = [];
@@ -213,6 +218,106 @@ function buildBlockingWarnings(
   }
 
   return warnings;
+}
+
+function StatusPill({
+  label,
+  value,
+  tone = "zinc",
+}: {
+  label: string;
+  value: string;
+  tone?: "zinc" | "emerald" | "amber" | "blue";
+}) {
+  const toneClasses = {
+    zinc: "border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300",
+    emerald:
+      "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300",
+    amber:
+      "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300",
+    blue: "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300",
+  };
+
+  return (
+    <div className={`rounded-lg border px-3 py-2 ${toneClasses[tone]}`}>
+      <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
+        {label}
+      </p>
+      <p className="mt-0.5 text-sm font-medium">{value}</p>
+    </div>
+  );
+}
+
+function PrivacyStatusPanel({
+  hasProfile,
+  hasTemplate,
+  hasReceipt,
+}: {
+  hasProfile: boolean;
+  hasTemplate: boolean;
+  hasReceipt: boolean;
+}) {
+  return (
+    <section className="mb-5 grid gap-3 sm:grid-cols-2">
+      <StatusPill
+        label="Profile + template"
+        value={hasProfile || hasTemplate ? "Browser storage" : "Not loaded"}
+        tone={hasProfile || hasTemplate ? "emerald" : "zinc"}
+      />
+      <StatusPill
+        label="Receipt extraction"
+        value={hasReceipt ? "Gemini on upload" : "Pending upload"}
+        tone={hasReceipt ? "amber" : "zinc"}
+      />
+      <StatusPill
+        label="Provider lookup"
+        value="Off unless env-enabled"
+        tone="zinc"
+      />
+      <StatusPill
+        label="Email"
+        value="Draft only"
+        tone="blue"
+      />
+    </section>
+  );
+}
+
+function ClaimPacketChecklist({ items }: { items: ChecklistItem[] }) {
+  const statusClasses = {
+    ready:
+      "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300",
+    review:
+      "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300",
+    waiting:
+      "border-zinc-200 bg-zinc-50 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-zinc-400",
+  };
+  const statusLabels = {
+    ready: "Ready",
+    review: "Review",
+    waiting: "Waiting",
+  };
+
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-700 dark:bg-zinc-800/40">
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+        Claim Packet
+      </h3>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {items.map((item) => (
+          <div
+            key={item.label}
+            className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${statusClasses[item.status]}`}
+          >
+            <span className="min-w-0 text-sm font-medium">{item.label}</span>
+            <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide">
+              {statusLabels[item.status]}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 async function convertImageToPngBytes(file: File): Promise<Uint8Array> {
@@ -505,6 +610,8 @@ export default function MainApp() {
       mappings,
       filledPdfUrl,
       toInvoiceAttachment,
+      mergeProfileIntoClaimData,
+      pdfFields,
       providerClassification,
       fxConversion,
       diagnosisConfirmed,
@@ -561,6 +668,67 @@ export default function MainApp() {
   }, [filledPdfUrl]);
 
   const isSetupComplete = templateName && mappings.length > 0;
+  const hasProfile = Boolean(
+    profile.patientName ||
+      profile.policyNumber ||
+      profile.memberId ||
+      profile.insuranceGroup
+  );
+  const hasTemplate = Boolean(templateName && pdfFields.length > 0);
+  const hasReceipt = Boolean(receiptName);
+  const errorCount = validationWarnings.filter((warning) => warning.severity === "error").length;
+  const warningCount = validationWarnings.filter(
+    (warning) => warning.severity !== "error"
+  ).length;
+  const checklistItems: ChecklistItem[] = [
+    {
+      label: "Profile details",
+      status: hasProfile ? "ready" : "waiting",
+    },
+    {
+      label: "Claim form template",
+      status: hasTemplate && mappings.length > 0 ? "ready" : "waiting",
+    },
+    {
+      label: "Receipt attached",
+      status: hasReceipt ? "ready" : "waiting",
+    },
+    {
+      label: "Extracted fields",
+      status:
+        step === "review" || step === "filling" || step === "complete"
+          ? "ready"
+          : "waiting",
+    },
+    {
+      label: "Diagnosis confirmed",
+      status:
+        step === "review" || step === "filling" || step === "complete"
+          ? diagnosisConfirmed
+            ? "ready"
+            : "review"
+          : "waiting",
+    },
+    {
+      label: "Validation",
+      status:
+        step === "review" || step === "filling" || step === "complete"
+          ? errorCount > 0
+            ? "review"
+            : warningCount > 0
+              ? "review"
+              : "ready"
+          : "waiting",
+    },
+    {
+      label: "Generated PDF",
+      status: filledPdfBlob ? "ready" : "waiting",
+    },
+    {
+      label: "Email destination",
+      status: profile.insurerEmail ? "ready" : "review",
+    },
+  ];
 
   const emailPreview =
     step === "complete" ? generateEmailPreview(profile, claimData) : null;
@@ -611,6 +779,12 @@ export default function MainApp() {
           </div>
         )}
 
+        <PrivacyStatusPanel
+          hasProfile={hasProfile}
+          hasTemplate={hasTemplate}
+          hasReceipt={hasReceipt}
+        />
+
         <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           {(step === "upload" || step === "extracting") && (
             <div className="space-y-4">
@@ -632,6 +806,8 @@ export default function MainApp() {
           {(step === "review" || step === "filling") && (
             <div className="space-y-5">
               <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Review and Correct Data</h2>
+
+              <ClaimPacketChecklist items={checklistItems} />
 
               <DataReviewForm
                 data={claimData}
@@ -681,6 +857,8 @@ export default function MainApp() {
                 </p>
               </div>
 
+              <ClaimPacketChecklist items={checklistItems} />
+
               <div className="flex flex-wrap gap-3">
                 <button
                   onClick={handleDownload}
@@ -700,7 +878,7 @@ export default function MainApp() {
                   onClick={handleShareViaEmail}
                   className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-zinc-200 px-4 py-3 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                 >
-                  Send via Email
+                  Open Email Draft
                 </button>
               </div>
 
@@ -709,8 +887,23 @@ export default function MainApp() {
                   <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">Email Preview</h3>
                   <p className="text-sm"><strong>To:</strong> {emailPreview.to || "(no email configured)"}</p>
                   <p className="text-sm"><strong>Subject:</strong> {emailPreview.subject}</p>
+                  <p className="mt-2 text-xs text-zinc-500">
+                    Your email app will open a draft. Attach the downloaded PDF before sending.
+                  </p>
                 </div>
               )}
+
+              <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950/30">
+                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300">
+                  Submission
+                </h3>
+                <div className="grid gap-2 text-sm text-blue-900 dark:text-blue-100 sm:grid-cols-2">
+                  <p>1. Download the generated claim packet.</p>
+                  <p>2. Open the email draft.</p>
+                  <p>3. Attach the downloaded PDF.</p>
+                  <p>4. Save a follow-up date after sending.</p>
+                </div>
+              </div>
 
               {filledPdfUrl && (
                 <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-700">

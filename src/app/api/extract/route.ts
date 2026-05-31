@@ -8,6 +8,13 @@ import {
   ProviderClassification,
   ValidationWarning,
 } from "@/lib/types";
+import {
+  inferForeignProvider,
+  normalizeValidationWarnings,
+  providerLookupEnabledFromEnv,
+  safeParsePdfFields,
+  validateUpload,
+} from "@/lib/extract-guards";
 
 const EXTRACTION_PROMPT = `You are a medical receipt/invoice data extraction assistant. Analyze the provided document and extract the following information. If the document is in a language other than English, translate all values into English.
 
@@ -325,16 +332,23 @@ export async function POST(request: NextRequest) {
 
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
-    const pdfFieldsRaw = formData.get("pdfFields");
-    const pdfFields = typeof pdfFieldsRaw === "string" ? JSON.parse(pdfFieldsRaw) : [];
+    const pdfFields = safeParsePdfFields(formData.get("pdfFields"));
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
+    const mimeType = file.type || "application/octet-stream";
+    const uploadValidation = validateUpload(file, process.env);
+    if (!uploadValidation.ok) {
+      return NextResponse.json(
+        { error: uploadValidation.error || "Unsupported upload." },
+        { status: uploadValidation.status || 400 }
+      );
+    }
+
     const bytes = await file.arrayBuffer();
     const base64 = Buffer.from(bytes).toString("base64");
-    const mimeType = file.type || "image/jpeg";
     const modelName = process.env.GEMINI_MODEL || "gemini-2.5-flash";
     const model = genAI.getGenerativeModel({ model: modelName });
 
@@ -364,7 +378,7 @@ export async function POST(request: NextRequest) {
     };
 
     let mappingSuggestions: MappingSuggestion[] = [];
-    let validationWarnings: ValidationWarning[] = [];
+    const validationWarnings: ValidationWarning[] = [];
     let providerClassification: ProviderClassification | null = null;
     let fxConversion: FxConversion | null = null;
     let diagnosisSuggestions: DiagnosisSuggestion[] = [];
@@ -375,7 +389,10 @@ export async function POST(request: NextRequest) {
       claimData.providerName,
       claimData.description
     );
-    if (providerClassification.confidence < 0.75) {
+    if (
+      providerClassification.confidence < 0.75 &&
+      providerLookupEnabledFromEnv(process.env)
+    ) {
       try {
         const lookedUp = await classifyProviderWithLookup(
           claimData.providerName,
@@ -390,6 +407,13 @@ export async function POST(request: NextRequest) {
           severity: "info",
         });
       }
+    } else if (providerClassification.confidence < 0.75) {
+      validationWarnings.push({
+        code: "provider_lookup_disabled",
+        message:
+          "Provider lookup is disabled for privacy; classification used local heuristics only.",
+        severity: "info",
+      });
     }
     if (!claimData.claimType && providerClassification) {
       claimData.claimType = providerClassification.category;
@@ -413,14 +437,11 @@ export async function POST(request: NextRequest) {
       if (chunks.length > 0) claimData.serviceCountry = chunks[chunks.length - 1];
     }
     if (!claimData.foreignProvider) {
-      const hint = `${claimData.serviceCountry} ${claimData.currency}`.toLowerCase();
-      claimData.foreignProvider =
-        claimData.currency.toUpperCase() !== "USD" ||
-        /(thailand|israel|japan|europe|france|spain|germany|uk|united kingdom|mexico|canada|australia)/i.test(
-          hint
-        )
-          ? "yes"
-          : "no";
+      claimData.foreignProvider = inferForeignProvider(
+        claimData.foreignProvider,
+        claimData.serviceCountry,
+        claimData.currency
+      );
     }
     const amount = parseNumber(claimData.amountCharged);
     if (!amount || !claimData.currency) {
@@ -465,13 +486,7 @@ export async function POST(request: NextRequest) {
                 typeof m?.claimDataKey === "string"
             )
           : [];
-        validationWarnings = Array.isArray(parsed?.validationWarnings)
-          ? parsed.validationWarnings.filter(
-              (w: ValidationWarning) =>
-                typeof w?.code === "string" &&
-                typeof w?.message === "string"
-            )
-          : [];
+        validationWarnings.push(...normalizeValidationWarnings(parsed));
       } catch {
         validationWarnings.push({
           code: "mapping_ai_failed",

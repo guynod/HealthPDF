@@ -1,4 +1,4 @@
-import { UserProfile, ClaimData } from "./types";
+import type { UserProfile, ClaimData } from "./types";
 
 function interpolate(
   template: string,
