@@ -1,9 +1,15 @@
 import {
   PDFDocument,
+  PDFDict,
+  PDFPage,
+  PDFFont,
+  PDFName,
   PDFTextField,
   PDFCheckBox,
   PDFDropdown,
   PDFRadioGroup,
+  StandardFonts,
+  rgb,
 } from "pdf-lib";
 import {
   PDFFieldInfo,
@@ -97,8 +103,154 @@ interface InvoiceAttachment {
   mimeType: string;
 }
 
+type WidgetRectangle = { x: number; y: number; width: number; height: number };
+type WidgetLike = { getRectangle(): WidgetRectangle };
+type FieldWithWidgets = {
+  getName(): string;
+  acroField: { getWidgets(): WidgetLike[] };
+  enableReadOnly(): void;
+};
+type FormWithWidgetLookup = {
+  getFields(): FieldWithWidgets[];
+  removeField(field: FieldWithWidgets): void;
+  findWidgetPage(widget: WidgetLike): PDFPage;
+};
+type AnnotationArrayLike = {
+  size(): number;
+  lookup(index: number): unknown;
+  remove(index: number): void;
+};
+type PageWithAnnotations = PDFPage & {
+  node: {
+    Annots(): AnnotationArrayLike | undefined;
+  };
+};
+
 function normalizeName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function printablePdfText(value: string): string {
+  return value
+    .replace(/[^\x20-\x7E]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getFieldDisplayValue(field: FieldWithWidgets): string {
+  try {
+    if (field instanceof PDFTextField) return printablePdfText(field.getText() || "");
+    if (field instanceof PDFDropdown) return printablePdfText(field.getSelected().join(", "));
+    if (field instanceof PDFRadioGroup) return printablePdfText(field.getSelected() || "");
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function drawTextIntoWidget(page: PDFPage, rect: WidgetRectangle, text: string, font: PDFFont): void {
+  const value = printablePdfText(text);
+  if (!value) return;
+
+  const maxWidth = Math.max(1, rect.width - 4);
+  let fontSize = Math.min(10, Math.max(6, rect.height * 0.62));
+  while (fontSize > 6 && font.widthOfTextAtSize(value, fontSize) > maxWidth) {
+    fontSize -= 0.5;
+  }
+
+  page.drawText(value, {
+    x: rect.x + 2,
+    y: rect.y + Math.max(1, (rect.height - fontSize) / 2),
+    size: fontSize,
+    font,
+    color: rgb(0, 0, 0),
+    maxWidth,
+  });
+}
+
+function drawCheckIntoWidget(page: PDFPage, rect: WidgetRectangle, font: PDFFont): void {
+  const size = Math.max(6, Math.min(12, rect.height * 0.78));
+  page.drawText("X", {
+    x: rect.x + Math.max(1, rect.width * 0.25),
+    y: rect.y + Math.max(1, rect.height * 0.12),
+    size,
+    font,
+    color: rgb(0, 0, 0),
+  });
+}
+
+function findWidgetPageOrFirst(
+  pdfDoc: PDFDocument,
+  form: FormWithWidgetLookup,
+  widget: WidgetLike
+): PDFPage {
+  try {
+    return form.findWidgetPage(widget);
+  } catch {
+    return pdfDoc.getPage(0);
+  }
+}
+
+function stripAcroFormCatalog(pdfDoc: PDFDocument): void {
+  try {
+    pdfDoc.catalog.delete(PDFName.of("AcroForm"));
+  } catch {
+    /* If catalog mutation fails, leave the remaining read-only fields in place. */
+  }
+}
+
+function removeWidgetAnnotations(pdfDoc: PDFDocument): void {
+  for (const page of pdfDoc.getPages() as PageWithAnnotations[]) {
+    const annots = page.node.Annots();
+    if (!annots) continue;
+    for (let index = annots.size() - 1; index >= 0; index -= 1) {
+      const annotation = annots.lookup(index);
+      if (!(annotation instanceof PDFDict)) continue;
+      const subtype = annotation.lookup(PDFName.of("Subtype"));
+      if (subtype instanceof PDFName && subtype.asString() === "/Widget") {
+        annots.remove(index);
+      }
+    }
+  }
+}
+
+async function fallbackFinalizeForm(pdfDoc: PDFDocument, form: ReturnType<PDFDocument["getForm"]>): Promise<void> {
+  // Some real-world AcroForms fail pdf-lib's appearance update/flatten path.
+  // Draw simple filled values onto the page first, then remove the fields.
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const formWithLookup = form as unknown as FormWithWidgetLookup;
+
+  for (const field of formWithLookup.getFields()) {
+    const value = getFieldDisplayValue(field);
+    const checked = field instanceof PDFCheckBox && field.isChecked();
+    for (const widget of field.acroField.getWidgets()) {
+      try {
+        const page = findWidgetPageOrFirst(pdfDoc, formWithLookup, widget);
+        const rect = widget.getRectangle();
+        if (checked) drawCheckIntoWidget(page, rect, font);
+        else if (value) drawTextIntoWidget(page, rect, value, font);
+      } catch {
+        /* Skip widgets that pdf-lib cannot locate safely. */
+      }
+    }
+  }
+
+  for (const field of [...formWithLookup.getFields()]) {
+    try {
+      formWithLookup.removeField(field);
+    } catch {
+      try {
+        field.enableReadOnly();
+      } catch {
+        /* Last-resort fallback: leave the problematic field as-is. */
+      }
+    }
+  }
+
+  if (formWithLookup.getFields().length > 0) {
+    removeWidgetAnnotations(pdfDoc);
+    stripAcroFormCatalog(pdfDoc);
+  }
 }
 
 function inferClaimType(value: string): string {
@@ -468,13 +620,7 @@ async function fillFormBase(
     try {
       form.flatten();
     } catch {
-      for (const field of form.getFields()) {
-        try {
-          field.enableReadOnly();
-        } catch {
-          /* ignore readonly failures */
-        }
-      }
+      await fallbackFinalizeForm(pdfDoc, form);
     }
   }
   await appendInvoicePages(pdfDoc, invoiceAttachment);

@@ -234,3 +234,29 @@ test("dummy claim template can be discovered, filled, and finalized locally", as
   assert.equal(finalizedDoc.getPageCount(), 1);
   assert.equal(finalizedDoc.getForm().getFields().length, 0);
 });
+
+test("finalized renderer strips fields when default appearances cannot encode a value", async () => {
+  const templateBytes = await createDummyClaimTemplate();
+  const claimData = {
+    patientName: "Example ผู้ป่วย",
+    dateOfService: "2026-05-31",
+    amountUSD: "27.20",
+    foreignProvider: "yes",
+  };
+  const mappings = [
+    { pdfFieldName: "patientName", claimDataKey: "patientName" },
+    { pdfFieldName: "dateOfService", claimDataKey: "dateOfService" },
+    { pdfFieldName: "amountUSD", claimDataKey: "amountUSD" },
+    {
+      pdfFieldName: "foreignProvider",
+      claimDataKey: "foreignProvider",
+      transform: "checkbox_truthy",
+    },
+  ];
+
+  const finalizedBytes = await pdfUtils.fillFormFinalized(templateBytes, claimData, mappings);
+  const finalizedDoc = await PDFDocument.load(finalizedBytes);
+
+  assert.equal(finalizedDoc.getPageCount(), 1);
+  assert.equal(finalizedDoc.getForm().getFields().length, 0);
+});
