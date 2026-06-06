@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "claim": "node scripts/healthpdf-cli.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
@@ -14,7 +15,8 @@
     "next": "16.1.6",
     "pdf-lib": "^1.17.1",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "typescript": "^5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -23,7 +25,6 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "tailwindcss": "^4"
   }
 }

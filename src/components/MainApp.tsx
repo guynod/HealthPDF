@@ -25,6 +25,7 @@ import {
 import { fillFormEditable, fillFormFinalized } from "@/lib/pdf-utils";
 import { generateMailtoLink, generateEmailPreview } from "@/lib/email";
 import { getPresetMappingForField } from "@/lib/form-presets";
+import { mergeProfileIntoClaimData as mergeWithProfile } from "@/lib/claim-data";
 import SettingsModal from "./SettingsModal";
 import UploadZone from "./UploadZone";
 import DataReviewForm from "./DataReviewForm";
@@ -408,60 +409,7 @@ export default function MainApp() {
 
   const mergeProfileIntoClaimData = useCallback(
     (data: ClaimData): ClaimData => {
-      const isIsoDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test((value || "").trim());
-      const normalizedCurrency = (data.currency || "").toUpperCase();
-      const rawForeign = (data.foreignProvider || "").trim().toLowerCase();
-      const foreignTruthy =
-        rawForeign === "yes" ||
-        rawForeign === "true" ||
-        rawForeign === "1" ||
-        rawForeign === "y" ||
-        rawForeign === "checked";
-      const foreignSignal =
-        normalizedCurrency && normalizedCurrency !== "USD"
-          ? true
-          : /(thailand|israel|japan|europe|france|spain|germany|uk|unitedkingdom|mexico|canada|australia)/i.test(
-              `${data.serviceCountry || ""}`.replace(/\s+/g, "")
-            );
-      const normalizedForeign =
-        (foreignTruthy || foreignSignal)
-          ? "yes"
-          : "no";
-
-      let normalizedClaimType = (data.claimType || "").trim().toLowerCase();
-      if (!normalizedClaimType || normalizedClaimType === "other") {
-        const text = `${data.description || ""} ${data.providerName || ""}`.toLowerCase();
-        if (/(outpatient|inpatient|hospital|emergency|clinic)/i.test(text)) {
-          normalizedClaimType = "hospital";
-        } else if (/(lab|laboratory|pathology|blood)/i.test(text)) {
-          normalizedClaimType = "lab";
-        } else if (/(xray|x-ray|mri|ct|ultrasound|radiology|imaging)/i.test(text)) {
-          normalizedClaimType = "imaging";
-        } else if (/(pharmacy|rx|prescription|drug)/i.test(text)) {
-          normalizedClaimType = "pharmacy";
-        } else if (/(doctor|physician|office visit|consult)/i.test(text)) {
-          normalizedClaimType = "doctor_visit";
-        }
-      }
-      return {
-        ...data,
-        patientName: data.patientName || profile.patientName,
-        subscriberName: profile.subscriberName || data.subscriberName || profile.patientName,
-        subscriberContact: profile.subscriberContact || data.subscriberContact,
-        // Prefer profile DOB for stability; user can still edit in review for family-member claims.
-        dateOfBirth:
-          profile.dateOfBirth ||
-          (isIsoDate(data.dateOfBirth) ? data.dateOfBirth : "") ||
-          data.dateOfBirth,
-        planName: profile.planName || profile.insurerName || data.planName || data.insurerName,
-        insurerName: profile.insurerName || data.insurerName || profile.planName,
-        policyNumber: profile.policyNumber || data.policyNumber,
-        memberId: profile.memberId || data.memberId,
-        insuranceGroup: profile.insuranceGroup || data.insuranceGroup,
-        patientAddress: data.patientAddress || profile.patientAddress,
-        foreignProvider: normalizedForeign,
-        claimType: normalizedClaimType || data.claimType,
-      };
+      return mergeWithProfile(data, profile);
     },
     [profile]
   );

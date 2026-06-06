@@ -1,9 +1,14 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState, type ChangeEvent } from "react";
 import { UserProfile, PDFFieldInfo, FieldMapping } from "@/lib/types";
 import { discoverFields, extractProfileDefaultsFromTemplate } from "@/lib/pdf-utils";
-import { saveTemplate } from "@/lib/storage";
+import { loadTemplate, saveTemplate } from "@/lib/storage";
+import {
+  base64ToBytes,
+  buildPortableConfig,
+  parsePortableConfigJson,
+} from "@/lib/portable-config";
 import ProfileSettings from "./ProfileSettings";
 import FieldMapper from "./FieldMapper";
 import UploadZone from "./UploadZone";
@@ -36,7 +41,9 @@ export default function SettingsModal({
   const [tab, setTab] = useState<"profile" | "template">("profile");
   const [templateError, setTemplateError] = useState("");
   const [templateInfo, setTemplateInfo] = useState("");
+  const [bundleInfo, setBundleInfo] = useState("");
   const [loading, setLoading] = useState(false);
+  const bundleInputRef = useRef<HTMLInputElement>(null);
 
   const handleTemplateUpload = useCallback(
     async (file: File) => {
@@ -89,6 +96,84 @@ export default function SettingsModal({
     [onPdfFieldsChange, onTemplateNameChange, profile, onProfileChange]
   );
 
+  const handleExportBundle = useCallback(async () => {
+    setTemplateError("");
+    setBundleInfo("");
+    try {
+      const templateBytes = await loadTemplate();
+      if (!templateBytes) {
+        setTemplateError("Upload a claim form template before exporting a portable config.");
+        return;
+      }
+
+      const config = buildPortableConfig({
+        profile,
+        pdfFields,
+        mappings,
+        templateName,
+        templateBytes,
+      });
+      const blob = new Blob([JSON.stringify(config, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `healthpdf-geha-config-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setBundleInfo("Portable config exported.");
+    } catch (err) {
+      setTemplateError(
+        err instanceof Error ? err.message : "Failed to export portable config"
+      );
+    }
+  }, [profile, pdfFields, mappings, templateName]);
+
+  const handleImportBundle = useCallback(
+    async (file: File) => {
+      setTemplateError("");
+      setBundleInfo("");
+      setLoading(true);
+      try {
+        const result = parsePortableConfigJson(await file.text());
+        if (!result.ok) {
+          setTemplateError(result.errors.join(" "));
+          return;
+        }
+
+        const templateBytes = base64ToBytes(result.config.templatePdfBase64);
+        await saveTemplate(templateBytes);
+        onProfileChange(result.config.profile);
+        onPdfFieldsChange(result.config.pdfFields);
+        onMappingsChange(result.config.mappings);
+        onTemplateNameChange(result.config.templateName);
+        setBundleInfo(
+          `Portable config imported with ${result.config.pdfFields.length} PDF field(s) and ${result.config.mappings.length} mapping(s).`
+        );
+      } catch (err) {
+        setTemplateError(
+          err instanceof Error ? err.message : "Failed to import portable config"
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [onProfileChange, onPdfFieldsChange, onMappingsChange, onTemplateNameChange]
+  );
+
+  const handleBundleFileChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file) return;
+      await handleImportBundle(file);
+    },
+    [handleImportBundle]
+  );
+
   if (!open) return null;
 
   return (
@@ -136,6 +221,44 @@ export default function SettingsModal({
             <ProfileSettings profile={profile} onChange={onProfileChange} />
           ) : (
             <div className="space-y-5">
+              <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-700 dark:bg-zinc-800/50">
+                <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                  Portable GEHA Config
+                </h3>
+                <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                  Export or restore this browser setup, including the claim form template, profile defaults, PDF fields, and mappings.
+                </p>
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={handleExportBundle}
+                    disabled={loading}
+                    className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  >
+                    Export Config
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => bundleInputRef.current?.click()}
+                    disabled={loading}
+                    className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  >
+                    Import Config
+                  </button>
+                  <input
+                    ref={bundleInputRef}
+                    type="file"
+                    accept="application/json,.json"
+                    className="hidden"
+                    onChange={handleBundleFileChange}
+                  />
+                </div>
+                {bundleInfo && (
+                  <p className="mt-2 text-sm text-emerald-600 dark:text-emerald-400">
+                    {bundleInfo}
+                  </p>
+                )}
+              </div>
               <UploadZone
                 label="Upload Claim Form Template (PDF)"
                 accept=".pdf"
